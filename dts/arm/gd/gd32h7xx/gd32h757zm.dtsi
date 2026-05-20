@@ -1,0 +1,98 @@
+/*
+ * Copyright (c) 2026 GigaDevice Semiconductor Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <arm/gd/gd32h7xx/gd32h757xx.dtsi>
+
+/ {
+	/* AXI SRAM, dedicated 512 KB region. */
+	sram0: memory@24000000 {
+		reg = <0x24000000 DT_SIZE_K(512)>;
+		compatible = "mmio-sram";
+	};
+
+	/*
+	 * Shared RAM can be mapped as ITCM, DTCM, or AXI SRAM.
+	 * Keep the AXI alias disabled until the startup configuration owns it.
+	 */
+	shared_sram: memory@24080000 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x24080000 DT_SIZE_K(512)>;
+		zephyr,memory-region = "SHARED_SRAM";
+		status = "disabled";
+	};
+
+	/* SRAM0, 16 KB. */
+	sram1: memory@30000000 {
+		reg = <0x30000000 DT_SIZE_K(16)>;
+		compatible = "zephyr,memory-region", "mmio-sram";
+		zephyr,memory-region = "SRAM1";
+	};
+
+	/* SRAM1, 16 KB. */
+	sram2: memory@30004000 {
+		reg = <0x30004000 DT_SIZE_K(16)>;
+		compatible = "zephyr,memory-region", "mmio-sram";
+		zephyr,memory-region = "SRAM2";
+	};
+
+	/* Data TCM RAM, default Zephyr-visible carveout from shared RAM. */
+	dtcm: memory@20000000 {
+		compatible = "zephyr,memory-region", "arm,dtcm";
+		reg = <0x20000000 DT_SIZE_K(128)>;
+		zephyr,memory-region = "DTCM";
+	};
+
+	/* Instruction TCM RAM, default Zephyr-visible carveout from shared RAM. */
+	itcm: memory@0 {
+		compatible = "zephyr,memory-region", "arm,itcm";
+		reg = <0x00000000 DT_SIZE_K(64)>;
+		zephyr,memory-region = "ITCM";
+	};
+
+	soc {
+		timer30: timer@4000e800 {
+			compatible = "gd,gd32-timer";
+			reg = <0x4000e800 0x400>;
+			interrupts = <163 0>;
+			interrupt-names = "global";
+			clocks = <&cctl GD32_CLOCK_TIMER30>;
+			resets = <&rctl GD32_RESET_TIMER30>;
+			channels = <4>;
+			status = "disabled";
+
+			pwm {
+				compatible = "gd,gd32-pwm";
+				status = "disabled";
+				#pwm-cells = <3>;
+			};
+		};
+
+		timer31: timer@4000ec00 {
+			compatible = "gd,gd32-timer";
+			reg = <0x4000ec00 0x400>;
+			interrupts = <164 0>;
+			interrupt-names = "global";
+			clocks = <&cctl GD32_CLOCK_TIMER31>;
+			resets = <&rctl GD32_RESET_TIMER31>;
+			channels = <4>;
+			status = "disabled";
+
+			pwm {
+				compatible = "gd,gd32-pwm";
+				status = "disabled";
+				#pwm-cells = <3>;
+			};
+		};
+	};
+};
+
+&adc0 {
+	channels = <16>;
+};
+
+&flash0 {
+	reg = <0x08000000 DT_SIZE_K(3840)>;
+};

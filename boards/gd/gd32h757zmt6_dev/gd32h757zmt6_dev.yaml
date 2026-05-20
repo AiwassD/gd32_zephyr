@@ -1,0 +1,15 @@
+identifier: gd32h757zmt6_dev
+name: GD32H757ZMT6-DEV
+type: mcu
+arch: arm
+ram: 1024
+flash: 3840
+toolchain:
+  - zephyr
+  - gnuarmemb
+  - xtools
+supported:
+  - gpio
+  - uart
+  - watchdog
+vendor: gd

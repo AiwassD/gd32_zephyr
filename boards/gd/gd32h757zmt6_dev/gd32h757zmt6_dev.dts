@@ -1,0 +1,43 @@
+/*
+ * Copyright (c) 2026 GigaDevice Semiconductor Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+
+#include <gd/gd32h7xx/gd32h757zm.dtsi>
+#include "gd32h757zmt6_dev-pinctrl.dtsi"
+
+/ {
+	model = "GigaDevice GD32H757ZMT6-DEV";
+	compatible = "gd,gd32h757zmt6-dev";
+
+	chosen {
+		zephyr,sram = &sram0;
+		zephyr,dtcm = &dtcm;
+		zephyr,flash = &flash0;
+		zephyr,console = &usart0;
+		zephyr,shell-uart = &usart0;
+		zephyr,flash-controller = &fmc;
+	};
+
+	aliases {
+		watchdog0 = &fwdgt;
+	};
+};
+
+&gpioa {
+	status = "okay";
+};
+
+&usart0 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&usart0_default>;
+	pinctrl-names = "default";
+};
+
+&backup_sram {
+	status = "okay";
+};

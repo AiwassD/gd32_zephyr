@@ -1,0 +1,6 @@
+board:
+  name: gd32h757vit6_prod
+  full_name: GD32H757VIT6-PROD
+  vendor: gd
+  socs:
+    - name: gd32h757

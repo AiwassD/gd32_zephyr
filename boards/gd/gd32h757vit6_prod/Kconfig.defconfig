@@ -1,0 +1,9 @@
+# Copyright (c) 2026 GigaDevice Semiconductor Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+if BOARD_GD32H757VIT6_PROD
+
+config BOARD
+	default "gd32h757vit6_prod"
+
+endif # BOARD_GD32H757VIT6_PROD

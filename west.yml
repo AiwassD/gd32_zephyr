@@ -183,8 +183,8 @@ manifest:
       groups:
         - hal
     - name: hal_gigadevice
-      revision: main
-      url: https://github.com/GD32-MCU-IOT/hal_gigadevice_zephyr.git
+      revision: gd32h757-pinctrl
+      url: https://github.com/AiwassD/hal_gigadevice_zephyr.git
       path: modules/hal/gigadevice
       groups:
         - hal
