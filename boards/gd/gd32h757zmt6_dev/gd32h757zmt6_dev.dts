@@ -20,6 +20,7 @@
 		zephyr,console = &usart0;
 		zephyr,shell-uart = &usart0;
 		zephyr,flash-controller = &fmc;
+		zephyr,code-partition = &slot0_partition;
 	};
 
 	aliases {
@@ -40,4 +41,38 @@
 
 &backup_sram {
 	status = "okay";
+};
+
+/*
+ * Flash partition table (3840 KB at 0x08000000), MCUboot-ready:
+ *   mcuboot 128 KB, image-0 (slot0) 1792 KB, image-1 (slot1) 1792 KB,
+ *   storage 128 KB (settings/NVS). Without CONFIG_BOOTLOADER_MCUBOOT the app
+ *   still links at the flash base; with it (sysbuild), at slot0.
+ */
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 DT_SIZE_K(128)>;
+		};
+
+		slot0_partition: partition@20000 {
+			label = "image-0";
+			reg = <0x00020000 DT_SIZE_K(1792)>;
+		};
+
+		slot1_partition: partition@1e0000 {
+			label = "image-1";
+			reg = <0x001e0000 DT_SIZE_K(1792)>;
+		};
+
+		storage_partition: partition@3a0000 {
+			label = "storage";
+			reg = <0x003a0000 DT_SIZE_K(128)>;
+		};
+	};
 };
