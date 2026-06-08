@@ -559,6 +559,29 @@
 			status = "disabled";
 		};
 
+		usbhs0: usb@40040000 {
+			compatible = "gd,gd32-usbhs", "snps,dwc2";
+			reg = <0x40040000 0x40000>;
+			interrupts = <77 0>;
+			interrupt-names = "usbhs";
+			clocks = <&cctl GD32_CLOCK_USBHS0>;
+			/* GD32H757 USBHS0 = 8 device endpoints (USBHS_MAX_EP_COUNT). */
+			num-in-eps = <8>;
+			num-out-eps = <8>;
+			/*
+			 * GHWCFG1/2/4 here feed ONLY the static endpoint
+			 * registration; udc_dwc2_init_controller() reads the real
+			 * values from the (glue-clocked) core at runtime. Derived
+			 * from the 8-endpoint count: ghwcfg2 NUMDEVEPS=7 (->8),
+			 * ghwcfg4 INEPS=7 (->8), ghwcfg1=0 (all bidirectional).
+			 * Confirm exact per-endpoint directions with a HW dump.
+			 */
+			ghwcfg1 = <0x0>;
+			ghwcfg2 = <0x1C00>;
+			ghwcfg4 = <0x1C000000>;
+			status = "disabled";
+		};
+
 		can0: can@4001a000 {
 			compatible = "gd,gd32-can";
 			reg = <0x4001a000 0x1000>;

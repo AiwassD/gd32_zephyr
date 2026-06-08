@@ -162,6 +162,9 @@ static inline struct usb_dwc2_reg *dwc2_get_base(const struct device *dev)
 #if DT_HAS_COMPAT_STATUS_OKAY(nordic_nrf_usbhs_nrf54l)
 #include "udc_dwc2_nrf_usbhs_nrf54l.h"
 #endif
+#if DT_HAS_COMPAT_STATUS_OKAY(gd_gd32_usbhs)
+#include "udc_dwc2_gd32_usbhs.h"
+#endif
 #if DT_HAS_COMPAT_STATUS_OKAY(st_stm32f4_fsotg)
 #include "udc_dwc2_stm32f4_fsotg.h"
 #endif

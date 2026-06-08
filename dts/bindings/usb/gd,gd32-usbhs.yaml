@@ -1,0 +1,19 @@
+# Copyright (c) 2026 HyperStrike
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  GigaDevice GD32 USBHS controller (Synopsys DWC2 IP with embedded HS PHY).
+
+  Bound by the generic Zephyr DWC2 UDC driver via the "snps,dwc2" compatible.
+  The "gd,gd32-usbhs" compatible is reserved to select the GD32 vendor quirks
+  glue (clock / USB PLL / PHY regulator) once that glue is implemented.
+
+compatible: "gd,gd32-usbhs"
+
+include:
+  - snps,dwc2.yaml
+
+properties:
+  clocks:
+    type: phandle-array
+    required: true
