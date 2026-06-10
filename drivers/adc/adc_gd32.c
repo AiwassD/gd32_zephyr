@@ -70,7 +70,16 @@ LOG_MODULE_REGISTER(adc_gd32, CONFIG_ADC_LOG_LEVEL);
 #define SPT_WIDTH	3U
 #define SAMPT1_SIZE	10U
 
-#if defined(CONFIG_SOC_SERIES_GD32F4XX)
+#if defined(CONFIG_SOC_SERIES_GD32H7XX)
+/*
+ * GD32H7 has a different ADC IP: the per-channel sample time lives in the RSQ
+ * registers (RSMPn[9:0]), not in SAMPT0/1, so there is no SMP_TIME table. The
+ * sample time is programmed together with the channel in adc_gd32_start_read.
+ * RSMPn is in ADC clock cycles; a generous fixed value is used because the
+ * stick pot is a high-impedance source. TODO(hw): confirm cycle mapping / tune.
+ */
+#define GD32H7_ADC_SMP	0x80U
+#elif defined(CONFIG_SOC_SERIES_GD32F4XX)
 #define SMP_TIME(x)	ADC_SAMPLETIME_##x
 
 static const uint16_t acq_time_tbl[8] = {3, 15, 28, 56, 84, 112, 144, 480};
@@ -192,20 +201,48 @@ static void adc_context_update_buffer_pointer(struct adc_context *ctx,
 
 static inline void adc_gd32_calibration(const struct adc_gd32_config *cfg)
 {
+	uint32_t cnt;
+	bool timeout = false;
+
 	ADC_CTL1(cfg->reg) |= ADC_CTL1_RSTCLB;
-	/* Wait for calibration registers initialized. */
-	while (ADC_CTL1(cfg->reg) & ADC_CTL1_RSTCLB) {
+	/* Wait for calibration registers initialized. Bounded so a stuck ADC
+	 * kernel clock fails loudly instead of hanging boot silently.
+	 */
+	for (cnt = 0U; ADC_CTL1(cfg->reg) & ADC_CTL1_RSTCLB; cnt++) {
+		if (cnt >= 1000000U) {
+			timeout = true;
+			break;
+		}
 	}
 
 	ADC_CTL1(cfg->reg) |= ADC_CTL1_CLB;
 	/* Wait for calibration complete. */
-	while (ADC_CTL1(cfg->reg) & ADC_CTL1_CLB) {
+	for (cnt = 0U; ADC_CTL1(cfg->reg) & ADC_CTL1_CLB; cnt++) {
+		if (cnt >= 1000000U) {
+			timeout = true;
+			break;
+		}
+	}
+
+	if (timeout) {
+		LOG_ERR("ADC calibration timeout (kernel clock not running?)");
 	}
 }
 
 static int adc_gd32_configure_sampt(const struct adc_gd32_config *cfg,
 				    uint8_t channel, uint16_t acq_time)
 {
+#if defined(CONFIG_SOC_SERIES_GD32H7XX)
+	/*
+	 * H7: sample time is per-channel in the RSQ registers, programmed with
+	 * the channel in adc_gd32_start_read. Only the default acquisition time
+	 * is supported here.
+	 */
+	ARG_UNUSED(cfg);
+	ARG_UNUSED(channel);
+
+	return (acq_time == ADC_ACQ_TIME_DEFAULT) ? 0 : -ENOTSUP;
+#else
 	uint8_t index = 0, offset;
 
 	if (acq_time != ADC_ACQ_TIME_DEFAULT) {
@@ -236,6 +273,7 @@ static int adc_gd32_configure_sampt(const struct adc_gd32_config *cfg,
 	}
 
 	return 0;
+#endif
 }
 
 static int adc_gd32_channel_setup(const struct device *dev,
@@ -272,7 +310,6 @@ static int adc_gd32_start_read(const struct device *dev,
 {
 	struct adc_gd32_data *data = dev->data;
 	const struct adc_gd32_config *cfg = dev->config;
-	uint8_t resolution_id;
 	uint32_t index;
 
 	index = find_lsb_set(sequence->channels) - 1;
@@ -280,6 +317,45 @@ static int adc_gd32_start_read(const struct device *dev,
 		LOG_ERR("Only single channel supported");
 		return -ENOTSUP;
 	}
+
+#if defined(CONFIG_SOC_SERIES_GD32H7XX)
+	{
+		uint32_t dres;
+
+		/* H7 DRES codes: 14B=0, 12B=1, 10B=2, 8B=3. */
+		switch (sequence->resolution) {
+		case 14U:
+			dres = 0U;
+			break;
+		case 12U:
+			dres = 1U;
+			break;
+		case 10U:
+			dres = 2U;
+			break;
+		case 8U:
+			dres = 3U;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		ADC_CTL0(cfg->reg) &= ~ADC_CTL0_DRES;
+		ADC_CTL0(cfg->reg) |= CTL0_DRES(dres);
+	}
+
+	if (sequence->calibrate) {
+		adc_gd32_calibration(cfg);
+	}
+
+	/*
+	 * H7 single regular conversion: sequence length 1 (RSQ0.RL = 0), and the
+	 * rank-0 channel together with its sample time go in RSQ8 (RSMPn | RSQn).
+	 */
+	ADC_RSQ0(cfg->reg) &= ~ADC_RSQ0_RL;
+	ADC_RSQ8(cfg->reg) = SQX_SMP(GD32H7_ADC_SMP) | index;
+#else
+	uint8_t resolution_id;
 
 	switch (sequence->resolution) {
 	case 12U:
@@ -319,6 +395,7 @@ static int adc_gd32_start_read(const struct device *dev,
 	/* Single conversion mode with regular group. */
 	ADC_RSQ2(cfg->reg) &= ~ADC_RSQX_RSQN;
 	ADC_RSQ2(cfg->reg) = index;
+#endif
 
 	data->buffer = sequence->buffer;
 
@@ -386,6 +463,16 @@ static int adc_gd32_init(const struct device *dev)
 			       (clock_control_subsys_t)&cfg->clkid);
 
 	(void)reset_line_toggle_dt(&cfg->reset);
+
+#if defined(CONFIG_SOC_SERIES_GD32H7XX)
+	/* The GD32H7 ADC needs a kernel (conversion) clock that the bus-enable
+	 * above does not provide. Use the synchronous HCLK-derived clock so no
+	 * PLL/source setup is needed; a large divider keeps CK_ADC well within
+	 * the ADC maximum for bring-up (tune later if a faster rate is wanted).
+	 */
+	ADC_SYNCCTL(cfg->reg) &= ~(ADC_SYNCCTL_ADCCK | ADC_SYNCCTL_ADCSCK);
+	ADC_SYNCCTL(cfg->reg) |= ADC_CLK_SYNC_HCLK_DIV16;
+#endif
 
 #if defined(CONFIG_SOC_SERIES_GD32F403) || \
 	defined(CONFIG_SOC_SERIES_GD32VF103) || \
