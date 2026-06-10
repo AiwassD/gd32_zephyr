@@ -17,3 +17,11 @@ properties:
   clocks:
     type: phandle-array
     required: true
+
+  ghwcfg3:
+    type: int
+    description: |
+      Value of the GHWCFG3 register. The GD32 USBHS core does not expose the
+      GHWCFG hardware-configuration registers (they read back as zero), so the
+      driver falls back to the devicetree ghwcfg1/2/3/4 values. GHWCFG3 carries
+      the device FIFO depth (DFIFODEPTH) and the packet/transfer counter widths.

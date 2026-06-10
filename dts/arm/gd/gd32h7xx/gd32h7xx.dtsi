@@ -569,16 +569,26 @@
 			num-in-eps = <8>;
 			num-out-eps = <8>;
 			/*
-			 * GHWCFG1/2/4 here feed ONLY the static endpoint
-			 * registration; udc_dwc2_init_controller() reads the real
-			 * values from the (glue-clocked) core at runtime. Derived
-			 * from the 8-endpoint count: ghwcfg2 NUMDEVEPS=7 (->8),
-			 * ghwcfg4 INEPS=7 (->8), ghwcfg1=0 (all bidirectional).
-			 * Confirm exact per-endpoint directions with a HW dump.
+			 * The GD32 USBHS core does not expose the GHWCFG
+			 * hardware-config registers (verified by a HW dump: they
+			 * read back zero), so udc_dwc2_init_controller() falls
+			 * back to these devicetree values. They describe the core:
+			 *   ghwcfg1=0          all 16 EPs bidirectional
+			 *   ghwcfg2=0x22881C40 HSPHYTYPE=UTMI+, slave (no DMA),
+			 *                      NUMDEVEPS=7 (->8), dynamic FIFO,
+			 *                      token/TX queue depths
+			 *   ghwcfg3=0x04000035 DFIFODEPTH=1024 words = 4KB FIFO RAM
+			 *                      (User Manual Fig 49-8 "End: 0x3FF" +
+			 *                      GRFLEN "1<=RXFD<=1024"; the vendor
+			 *                      header's 1280 is misleading), pkt
+			 *                      width 7, xfer width 16
+			 *   ghwcfg4=0x1E000000 DEDFIFOMODE=1, INEPS=7 (->8),
+			 *                      PHYDATAWIDTH=0 (8-bit UTMI+)
 			 */
 			ghwcfg1 = <0x0>;
-			ghwcfg2 = <0x1C00>;
-			ghwcfg4 = <0x1C000000>;
+			ghwcfg2 = <0x22881C40>;
+			ghwcfg3 = <0x04000035>;
+			ghwcfg4 = <0x1E000000>;
 			status = "disabled";
 		};
 
