@@ -61,6 +61,13 @@
 				write-block-size = <2>;
 				max-erase-time-ms = <8000>;
 				page-size = <DT_SIZE_K(4)>;
+				/*
+				 * Standard soc-nv-flash erase granularity (the H73x/75x
+				 * main flash is uniform 4KB sectors). Build-time
+				 * consumers (e.g. MCUboot BOOT_MAX_IMG_SECTORS_AUTO)
+				 * read this property, not the GD32 page-size.
+				 */
+				erase-block-size = <DT_SIZE_K(4)>;
 			};
 		};
 
