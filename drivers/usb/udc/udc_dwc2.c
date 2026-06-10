@@ -219,9 +219,19 @@ static void dwc2_flush_rx_fifo(const struct device *dev)
 {
 	struct usb_dwc2_reg *const base = dwc2_get_base(dev);
 	mem_addr_t grstctl_reg = (mem_addr_t)&base->grstctl;
+	unsigned int cnt = 0U;
 
 	sys_write32(USB_DWC2_GRSTCTL_RXFFLSH, grstctl_reg);
 	while (sys_read32(grstctl_reg) & USB_DWC2_GRSTCTL_RXFFLSH) {
+		/* A FIFO flush only completes while the PHY clock runs; bound
+		 * the wait so a misconfigured PHY clock cannot hang boot.
+		 */
+		if (++cnt > 10000U) {
+			LOG_ERR("RX FIFO flush timeout, GRSTCTL 0x%08x",
+				sys_read32(grstctl_reg));
+			return;
+		}
+		k_busy_wait(1);
 	}
 }
 
@@ -230,11 +240,18 @@ static void dwc2_flush_tx_fifo(const struct device *dev, const uint8_t fnum)
 	struct usb_dwc2_reg *const base = dwc2_get_base(dev);
 	mem_addr_t grstctl_reg = (mem_addr_t)&base->grstctl;
 	uint32_t grstctl;
+	unsigned int cnt = 0U;
 
 	grstctl = usb_dwc2_set_grstctl_txfnum(fnum) | USB_DWC2_GRSTCTL_TXFFLSH;
 
 	sys_write32(grstctl, grstctl_reg);
 	while (sys_read32(grstctl_reg) & USB_DWC2_GRSTCTL_TXFFLSH) {
+		if (++cnt > 10000U) {
+			LOG_ERR("TX FIFO flush timeout, GRSTCTL 0x%08x",
+				sys_read32(grstctl_reg));
+			return;
+		}
+		k_busy_wait(1);
 	}
 }
 
@@ -481,6 +498,17 @@ static int dwc2_tx_fifo_write(const struct device *dev,
 	if (cfg->addr != USB_CONTROL_EP_IN) {
 		/* Non-control endpoint, set CNAK for all transfers */
 		diepctl |= USB_DWC2_DEPCTL_CNAK;
+	} else if (dwc2_in_completer_mode(dev) && udc_get_buf_info(buf)->status) {
+		/*
+		 * Completer mode: the control-IN status ZLP must clear NAK
+		 * atomically with EPENA. Otherwise this EPENA write latches
+		 * DIEPCTL0.NAKSTS and raises INEPNAKEFF, and there is no
+		 * STSPHSERCVD interrupt in Completer mode (the GD32 USBHS has
+		 * no such event at all) to clear it later, so the NAK stays
+		 * latched and INEPNAKEFF storms IEPINT. Mirror the GD32 vendor
+		 * stack, which always arms IN transfers with CNAK | EPEN.
+		 */
+		diepctl |= USB_DWC2_DEPCTL_CNAK;
 	}
 	sys_write32(diepctl, diepctl_reg);
 
@@ -656,7 +684,6 @@ static void dwc2_prep_rx(const struct device *dev, struct net_buf *buf,
 
 	k_event_clear(&priv->ep_disabled, BIT(16 + ep_idx));
 
-	LOG_INF("Prepare RX 0x%02x doeptsiz 0x%x", cfg->addr, doeptsiz);
 }
 
 static void dwc2_handle_xfer_next(const struct device *dev,
@@ -1723,6 +1750,7 @@ static int dwc2_core_soft_reset(const struct device *dev)
 static int udc_dwc2_init_controller(const struct device *dev)
 {
 	struct udc_dwc2_data *const priv = udc_get_private(dev);
+	const struct udc_dwc2_config *const config = dev->config;
 	struct usb_dwc2_reg *const base = dwc2_get_base(dev);
 	mem_addr_t grxfsiz_reg = (mem_addr_t)&base->grxfsiz;
 	mem_addr_t gahbcfg_reg = (mem_addr_t)&base->gahbcfg;
@@ -1756,6 +1784,19 @@ static int udc_dwc2_init_controller(const struct device *dev)
 	ghwcfg3 = sys_read32((mem_addr_t)&base->ghwcfg3);
 	ghwcfg4 = sys_read32((mem_addr_t)&base->ghwcfg4);
 
+	/*
+	 * Some controllers (e.g. the GD32 USBHS) do not expose the GHWCFG
+	 * hardware-configuration registers; they read back as zero. Fall back to
+	 * the values described in devicetree so the core can still be configured.
+	 */
+	if (ghwcfg2 == 0U && ghwcfg3 == 0U && ghwcfg4 == 0U) {
+		priv->ghwcfg1 = config->ghwcfg1;
+		ghwcfg2 = config->ghwcfg2;
+		ghwcfg3 = config->ghwcfg3;
+		ghwcfg4 = config->ghwcfg4;
+		LOG_INF("GHWCFG read back zero; using devicetree values");
+	}
+
 	if (!(ghwcfg4 & USB_DWC2_GHWCFG4_DEDFIFOMODE)) {
 		LOG_ERR("Only dedicated TX FIFO mode is supported");
 		return -ENOTSUP;
@@ -1764,8 +1805,14 @@ static int udc_dwc2_init_controller(const struct device *dev)
 	/*
 	 * Force device mode as we do no support role changes.
 	 * Wait 25ms for the change to take effect.
+	 *
+	 * Read-modify-write rather than building the register from scratch so
+	 * that vendor-specific GUSBCFG bits set by the glue survive. The GD32
+	 * USBHS embedded-HS-PHY select (GUSBCS bit 5) lives here; clobbering it
+	 * deselects the HS PHY, stopping the FIFO clock and hanging the later
+	 * RX FIFO flush.
 	 */
-	gusbcfg = USB_DWC2_GUSBCFG_FORCEDEVMODE;
+	gusbcfg = sys_read32(gusbcfg_reg) | USB_DWC2_GUSBCFG_FORCEDEVMODE;
 	sys_write32(gusbcfg, gusbcfg_reg);
 	k_msleep(25);
 
@@ -1934,6 +1981,14 @@ static int udc_dwc2_init_controller(const struct device *dev)
 		/* Get available SPRAM size and calculate max allocatable RX fifo size */
 		val = sys_read32((mem_addr_t)&base->gdfifocfg);
 		spram_size = usb_dwc2_get_gdfifocfg_gdfifocfg(val);
+		if (spram_size == 0U) {
+			/*
+			 * The GD32 USBHS core does not populate GDFIFOCFG (it
+			 * reads back zero, like GHWCFG). Fall back to the total
+			 * device FIFO depth taken from the devicetree GHWCFG3.
+			 */
+			spram_size = priv->dfifodepth;
+		}
 		max_rxfifo = ((spram_size * MAX_RXFIFO_GDFIFO_PERCENTAGE) / 100);
 
 		/* TODO: For proper runtime FIFO sizing UDC driver would have to
@@ -1955,6 +2010,14 @@ static int udc_dwc2_init_controller(const struct device *dev)
 		 * to store reset value. Read the reset value and make sure that
 		 * the programmed value is not greater than what driver sets.
 		 */
+		if (priv->rxfifo_depth == 0U) {
+			/*
+			 * The GD32 USBHS core also reads GRXFSIZ back as zero at
+			 * reset; seed from the speed-based default so the RX FIFO
+			 * is not clamped to zero below.
+			 */
+			priv->rxfifo_depth = default_depth;
+		}
 		priv->rxfifo_depth = MIN(MIN(priv->rxfifo_depth, default_depth), max_rxfifo);
 		sys_write32(usb_dwc2_set_grxfsiz(priv->rxfifo_depth), grxfsiz_reg);
 
@@ -2261,6 +2324,19 @@ static void dwc2_on_bus_reset(const struct device *dev)
 	uint32_t doepmsk;
 	uint32_t diepmsk;
 
+	/*
+	 * Clear all stale per-endpoint interrupt flags latched across the
+	 * suspend->resume->reset transition (mirrors the GD32 bare-metal
+	 * usbd_int_reset(), which writes DIEPINTF/DOEPINTF = 0xFF for every EP).
+	 * Otherwise a DOEPINT/DIEPINT source that is NOT in the reduced
+	 * completer-mode doepmsk/diepmsk stays asserted, keeps DAINT (and thus
+	 * GINTSTS.OEPINT/IEPINT) set, and the ISR livelocks after reset.
+	 */
+	for (uint8_t i = 0U; i < priv->numdeveps; i++) {
+		sys_write32(0xFFFFFFFFU, (mem_addr_t)&base->out_ep[i].doepint);
+		sys_write32(0xFFFFFFFFU, (mem_addr_t)&base->in_ep[i].diepint);
+	}
+
 	/* Set the NAK bit for all OUT endpoints */
 	for (uint8_t i = 0U; i < priv->numdeveps; i++) {
 		uint32_t epdir = usb_dwc2_get_ghwcfg1_epdir(priv->ghwcfg1, i);
@@ -2447,15 +2523,39 @@ static inline void dwc2_handle_iepint(const struct device *dev)
 			if (!(diepctl & USB_DWC2_DEPCTL_NAKSTS)) {
 				/* Ignore stale NAK effective interrupt */
 			} else if (n == 0 && priv->ignore_ep0_nakeff) {
-				/* Status stage enabled endpoint. NAK will be
-				 * cleared in STSPHSERCVD interrupt.
+				/*
+				 * Control-IN status stage armed EP0 and latched
+				 * NAKSTS, raising this INEPNAKEFF. Completer mode
+				 * has no STSPHSERCVD interrupt to clear the NAK
+				 * later (the GD32 USBHS has no such event at
+				 * all), so clear it here with CNAK to let the
+				 * status ZLP transmit and complete on XFERCOMPL.
+				 * The CNAK | EPEN co-arming above normally avoids
+				 * reaching this path; it hardens against a stale
+				 * re-latch so INEPNAKEFF cannot storm IEPINT.
 				 */
+				priv->ignore_ep0_nakeff = 0;
+				sys_write32(diepctl | USB_DWC2_DEPCTL_CNAK,
+					    diepctl_reg);
 			} else if (diepctl & USB_DWC2_DEPCTL_EPENA) {
 				diepctl &= ~USB_DWC2_DEPCTL_EPENA;
 				diepctl |= USB_DWC2_DEPCTL_EPDIS;
 				sys_write32(diepctl, diepctl_reg);
 			} else if (priv->iso_in_rearm & (BIT(n))) {
 				priv->iso_in_rearm &= ~BIT(n);
+			} else {
+				/*
+				 * GD32: the IN endpoint is already disabled
+				 * (EPENA clear) but its NAK status stays latched.
+				 * The IN-disable path uses only per-endpoint SNAK
+				 * (no Global IN NAK), so nothing clears NAKSTS and
+				 * INEPNAKEFF keeps re-asserting, storming IEPINT and
+				 * stalling the disable. Write CNAK to clear the NAK
+				 * and complete the disable.
+				 */
+				sys_write32(diepctl | USB_DWC2_DEPCTL_CNAK,
+					    diepctl_reg);
+				k_event_post(&priv->ep_disabled, BIT(n));
 			}
 		}
 
@@ -3276,6 +3376,7 @@ static const struct udc_api udc_dwc2_api = {
 		.quirks = UDC_DWC2_VENDOR_QUIRK_GET(n),				\
 		.ghwcfg1 = DT_INST_PROP(n, ghwcfg1),				\
 		.ghwcfg2 = DT_INST_PROP(n, ghwcfg2),				\
+		.ghwcfg3 = DT_INST_PROP_OR(n, ghwcfg3, 0),			\
 		.ghwcfg4 = DT_INST_PROP(n, ghwcfg4),				\
 	};									\
 										\

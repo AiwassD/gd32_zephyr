@@ -15,9 +15,11 @@
  * and Drivers/.../gd32h7xx_rcu.c. This targets the embedded HS PHY:
  *   PLLUSBHS0 = HXTAL / 5 * 96 / 10  ->  48 MHz USB clock.
  *
- * GHWCFG1/2/4 are NOT set here (they live in the devicetree node) and still
- * need a one-shot hardware dump to switch the core from the FS-default to true
- * HS; the clock/PHY path set up here is HS-capable regardless.
+ * The GD32 USBHS core does not expose the GHWCFG hardware-config registers
+ * (they read back zero), so the generic driver falls back to the GHWCFG values
+ * in the devicetree node. This glue powers the PHY and, because VBUS sensing is
+ * left off, forces B-peripheral session valid (post_enable) so the core starts
+ * a device session — mirroring the bare-metal device-mode init.
  */
 
 #ifndef ZEPHYR_DRIVERS_USB_UDC_DWC2_GD32_USBHS_H
@@ -43,6 +45,21 @@
 /* GCCFG (DWC2 +0x38): GD32 embedded-PHY power-up. */
 #define GD32_USBHS_GCCFG		(GD32_USBHS_BASE + 0x38UL)
 #define GD32_USBHS_GCCFG_PHY_PWRON	BIT(16)
+/*
+ * GOTGCS (DWC2 +0x00): with VBUS sensing off, force B-peripheral session valid
+ * so the core enters a device session without a VBUS comparator input.
+ */
+#define GD32_USBHS_GOTGCS		(GD32_USBHS_BASE + 0x00UL)
+#define GD32_USBHS_GOTGCS_BVOE		BIT(6)	/* B-valid override enable */
+#define GD32_USBHS_GOTGCS_BVOV		BIT(7)	/* B-valid override value */
+/*
+ * PCGCCTL (DWC2 +0xE00): power & clock gating control. Cleared to ungate the
+ * USB PHY / HCLK clocks. The generic driver only writes PCGCCTL on the
+ * hibernation path (disabled here via ghwcfg4), so a warm reset that left the
+ * stop-clock bits set from a prior suspend would gate the PHY clock and block
+ * enumeration. The bare-metal device init clears it for the same reason.
+ */
+#define GD32_USBHS_PCGCCTL		(GD32_USBHS_BASE + 0xE00UL)
 
 #define GD32_RCU_BASE			0x58024400UL
 #define GD32_RCU_ADDCTL1		(GD32_RCU_BASE + 0xC4UL)
@@ -116,6 +133,14 @@ static inline int gd32_usbhs_pre_enable(const struct gd32_usbhs_config *cfg)
 		return ret;
 	}
 
+	/*
+	 * Ungate the USB PHY / HCLK clocks before anything waits on the PHY
+	 * clock. A warm reset may leave PCGCCTL's stop-clock bits set from a
+	 * prior suspend; the generic driver only clears them on the (disabled)
+	 * hibernation path.
+	 */
+	sys_write32(0U, GD32_USBHS_PCGCCTL);
+
 	/* 3. Power up the embedded HS PHY (GUSBCFG embedded-PHY + GCCFG PWRON). */
 	sys_set_bits(GD32_USBHS_GUSBCFG, GD32_USBHS_GUSBCFG_EMBED_HS_PHY);
 	sys_set_bits(GD32_USBHS_GCCFG, GD32_USBHS_GCCFG_PHY_PWRON);
@@ -145,6 +170,24 @@ static inline int gd32_usbhs_pre_enable(const struct gd32_usbhs_config *cfg)
 	return 0;
 }
 
+static inline int gd32_usbhs_post_enable(const struct gd32_usbhs_config *cfg)
+{
+	ARG_UNUSED(cfg);
+
+	/*
+	 * The generic DWC2 controller init runs a core soft reset and, with VBUS
+	 * sensing off, leaves the device session invalid. Re-assert the PHY
+	 * power and force B-peripheral session valid (mirrors the GigaDevice
+	 * bare-metal device-mode init) so the core operates once the generic
+	 * driver clears soft-disconnect.
+	 */
+	sys_set_bits(GD32_USBHS_GCCFG, GD32_USBHS_GCCFG_PHY_PWRON);
+	sys_set_bits(GD32_USBHS_GOTGCS,
+		     GD32_USBHS_GOTGCS_BVOE | GD32_USBHS_GOTGCS_BVOV);
+
+	return 0;
+}
+
 static inline int gd32_usbhs_disable(const struct gd32_usbhs_config *cfg)
 {
 	ARG_UNUSED(cfg);
@@ -153,6 +196,21 @@ static inline int gd32_usbhs_disable(const struct gd32_usbhs_config *cfg)
 	sys_clear_bits(GD32_USBHS_GCCFG, GD32_USBHS_GCCFG_PHY_PWRON);
 	sys_clear_bits(GD32_PMU_CTL2,
 		       GD32_PMU_CTL2_USBSEN | GD32_PMU_CTL2_VUSB33DEN);
+
+	return 0;
+}
+
+/*
+ * Advertise High-Speed capability. The generic driver leaves data->caps.hs
+ * false unless a vendor caps quirk sets it (it cannot read the GD32's GHWCFG,
+ * which reads back zero). The GD32 USBHS embedded PHY is HS-capable, so the
+ * device stack may register a High-Speed configuration.
+ */
+static int gd32_usbhs_caps(const struct device *dev)
+{
+	struct udc_data *data = dev->data;
+
+	data->caps.hs = true;
 
 	return 0;
 }
@@ -168,6 +226,12 @@ static inline int gd32_usbhs_disable(const struct gd32_usbhs_config *cfg)
 		return gd32_usbhs_pre_enable(&gd32_usbhs_cfg_##n);		\
 	}									\
 										\
+	static int gd32_usbhs_post_enable_##n(const struct device *dev)		\
+	{									\
+		ARG_UNUSED(dev);						\
+		return gd32_usbhs_post_enable(&gd32_usbhs_cfg_##n);		\
+	}									\
+										\
 	static int gd32_usbhs_disable_##n(const struct device *dev)		\
 	{									\
 		ARG_UNUSED(dev);						\
@@ -176,7 +240,9 @@ static inline int gd32_usbhs_disable(const struct gd32_usbhs_config *cfg)
 										\
 	const struct dwc2_vendor_quirks dwc2_vendor_quirks_##n = {		\
 		.pre_enable = gd32_usbhs_pre_enable_##n,			\
+		.post_enable = gd32_usbhs_post_enable_##n,			\
 		.disable = gd32_usbhs_disable_##n,				\
+		.caps = gd32_usbhs_caps,					\
 	};
 
 DT_INST_FOREACH_STATUS_OKAY(QUIRK_GD32_USBHS_DEFINE)
