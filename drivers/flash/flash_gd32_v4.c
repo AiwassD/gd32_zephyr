@@ -86,7 +86,7 @@ int flash_gd32_write_range(off_t offset, const void *data, size_t len)
 {
 	int ret = 0;
 	flash_prg_t *prg_flash = (flash_prg_t *)((uint8_t *)SOC_NV_FLASH_ADDR + offset);
-	uint32_t *prg_data = (uint32_t *)data;
+	const flash_prg_t *prg_data = (const flash_prg_t *)data;
 
 	gd32_fmc_v4_unlock();
 
