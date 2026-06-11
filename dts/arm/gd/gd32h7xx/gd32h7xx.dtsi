@@ -58,7 +58,15 @@
 
 			flash0: flash@8000000 {
 				compatible = "gd,gd32-nv-flash-v4", "soc-nv-flash";
-				write-block-size = <2>;
+				/*
+				 * The H7 FMC only supports word/double-word
+				 * programming (no half-word): write-block-size
+				 * must be 4. With 2 the v4 driver programs
+				 * half-words, which the FMC rejects/corrupts
+				 * (reads back zero), and the driver write loop
+				 * also mis-steps its source pointer.
+				 */
+				write-block-size = <4>;
 				max-erase-time-ms = <8000>;
 				page-size = <DT_SIZE_K(4)>;
 				/*
