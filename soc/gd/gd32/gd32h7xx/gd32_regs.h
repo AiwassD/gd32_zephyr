@@ -9,6 +9,17 @@
 
 #include <zephyr/sys/util_macro.h>
 
+/*
+ * Unique device ID (96 bits), read by the hwinfo driver. GD32H737/757/759
+ * User Manual rev 1.6 section 1.10.2: base address 0x1FF0F7E8, factory
+ * programmed (the same density+8 layout every other GD32 series has at
+ * 0x1FFFF7E0/0x1FFFF7E8).
+ */
+#define GD32_UID_BASE  0x1FF0F7E8U
+#define GD32_UID_WORD0 (GD32_UID_BASE + 0x0U)
+#define GD32_UID_WORD1 (GD32_UID_BASE + 0x4U)
+#define GD32_UID_WORD2 (GD32_UID_BASE + 0x8U)
+
 /* RCU */
 #define RCU_CFG0_OFFSET      0x08U
 #define RCU_AHB1EN_OFFSET    0x30U
