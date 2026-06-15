@@ -78,6 +78,7 @@ struct dma_gd32_channel {
 	void *user_data;
 	uint32_t direction;
 	bool busy;
+	bool cyclic;
 };
 
 struct dma_gd32_data {
@@ -479,7 +480,11 @@ static int dma_gd32_config(const struct device *dev, uint32_t channel,
 				     dma_gd32_memory_width(memory_cfg->width));
 	gd32_dma_periph_width_config(cfg->reg, channel,
 				     dma_gd32_periph_width(periph_cfg->width));
-	gd32_dma_circulation_disable(cfg->reg, channel);
+	if (dma_cfg->cyclic) {
+		gd32_dma_circulation_enable(cfg->reg, channel);
+	} else {
+		gd32_dma_circulation_disable(cfg->reg, channel);
+	}
 #if DT_HAS_COMPAT_STATUS_OKAY(gd_gd32_dma_v1)
 #if !defined(GD32_DMA_V1_NO_SUBPERIPHERAL)
 	if (dma_cfg->channel_direction != MEMORY_TO_MEMORY) {
@@ -492,6 +497,7 @@ static int dma_gd32_config(const struct device *dev, uint32_t channel,
 	data->channels[channel].callback = dma_cfg->dma_callback;
 	data->channels[channel].user_data = dma_cfg->user_data;
 	data->channels[channel].direction = dma_cfg->channel_direction;
+	data->channels[channel].cyclic = dma_cfg->cyclic;
 
 	return 0;
 }
@@ -651,7 +657,9 @@ static void dma_gd32_ch_isr(const struct device *dev, uint32_t ch)
 
 	gd32_dma_interrupt_flag_clear(cfg->reg, ch,
 				      DMA_FLAG_FTF | GD32_DMA_FLAG_ERRORS);
-	data->channels[ch].busy = false;
+	if (!data->channels[ch].cyclic) {
+		data->channels[ch].busy = false;
+	}
 
 	if (data->channels[ch].callback) {
 		data->channels[ch].callback(dev, data->channels[ch].user_data,
