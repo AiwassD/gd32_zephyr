@@ -33,6 +33,15 @@ static const struct arm_mpu_region mpu_regions[] = {
 	MPU_REGION_ENTRY("SRAM_ETH_DESC", DT_REG_ADDR(sram_eth_node), REGION_PPB_ATTR(REGION_256B)),
 #endif
 #endif
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(gpad_adc))
+	/*
+	 * Free-running ADC DMA rings live in the D2-domain sram1 (0x30000000),
+	 * which no other region covers, so mark the whole bank non-cacheable.
+	 */
+	MPU_REGION_ENTRY("AFE_DMA_BUF", DT_REG_ADDR(DT_NODELABEL(sram1)),
+			 REGION_RAM_NOCACHE_ATTR(REGION_16K)),
+#endif
 };
 
 const struct arm_mpu_config mpu_config = {

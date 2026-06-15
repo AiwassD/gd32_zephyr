@@ -14,6 +14,7 @@
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/reset.h>
 #include <zephyr/drivers/adc/hs2_afe.h>
+#include <zephyr/linker/devicetree_regions.h>
 #include <zephyr/logging/log.h>
 
 #include <gd32_adc.h>
@@ -229,8 +230,12 @@ int hs2_afe_read_snapshot(const struct device *afe, int32_t raw[HS2_AFE_AXES])
 
 #define AFE_INIT(inst)									\
 	PINCTRL_DT_INST_DEFINE(inst);							\
-	static uint16_t afe_ring0_##inst[DT_INST_PROP(inst, frames) * AFE_RANKS];	\
-	static uint16_t afe_ring1_##inst[DT_INST_PROP(inst, frames) * AFE_RANKS];	\
+	static uint16_t afe_ring0_##inst[DT_INST_PROP(inst, frames) * AFE_RANKS]	\
+		__aligned(32) __attribute__((__section__(				\
+			LINKER_DT_NODE_REGION_NAME(DT_NODELABEL(sram1)))));		\
+	static uint16_t afe_ring1_##inst[DT_INST_PROP(inst, frames) * AFE_RANKS]	\
+		__aligned(32) __attribute__((__section__(				\
+			LINKER_DT_NODE_REGION_NAME(DT_NODELABEL(sram1)))));		\
 	static struct afe_data afe_data_##inst;						\
 	static const struct afe_config afe_cfg_##inst = {				\
 		.adc = {								\
