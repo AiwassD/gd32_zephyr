@@ -1,0 +1,13 @@
+# Copyright (c) 2026 HyperStrike
+# SPDX-License-Identifier: Apache-2.0
+
+config HS2_GD32_ADC_FREERUN
+	bool "GD32H7 free-running dual-ADC analog front-end"
+	default y
+	depends on DT_HAS_HS2_GD32_ADC_FREERUN_ENABLED
+	select DMA
+	select PINCTRL
+	help
+	  Free-running ADC0/ADC1 + cyclic DMA analog sampler with a
+	  latest-frame snapshot read. Used by the HS2 analog stick driver.
+	  Bypasses the Zephyr ADC request/response framework.

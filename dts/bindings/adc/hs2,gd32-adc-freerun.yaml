@@ -1,0 +1,47 @@
+# Copyright (c) 2026 HyperStrike
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  GD32H7 free-running dual-ADC analog front-end. Owns two ADC instances
+  (referenced via the adcs phandles, which should themselves be disabled so
+  the standard gd,gd32-adc driver does not also claim them) and runs each in
+  scan + continuous mode with a cyclic DMA stream. Exposes a latest-frame
+  snapshot read instead of the Zephyr ADC request/response API.
+
+compatible: "hs2,gd32-adc-freerun"
+
+include: [base.yaml, pinctrl-device.yaml]
+
+properties:
+  adcs:
+    type: phandles
+    required: true
+    description: ADC0 then ADC1 nodes (reg/clocks/resets are read from them).
+
+  dmas:
+    type: phandle-array
+    required: true
+    description: DMA spec for adc0 then adc1 (via dmamux).
+
+  dma-names:
+    type: string-array
+    required: true
+
+  adc0-channels:
+    type: array
+    required: true
+    description: rank0..2 channel numbers on ADC0 (LX, LY, L2).
+
+  adc1-channels:
+    type: array
+    required: true
+    description: rank0..2 channel numbers on ADC1 (RX, RY, R2).
+
+  frames:
+    type: int
+    default: 4
+    description: ring depth in frames (one frame = 3 ranks).
+
+  resolution:
+    type: int
+    default: 14
