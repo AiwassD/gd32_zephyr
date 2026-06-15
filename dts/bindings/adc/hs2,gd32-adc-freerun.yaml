@@ -30,18 +30,24 @@ properties:
   adc0-channels:
     type: array
     required: true
-    description: rank0..2 channel numbers on ADC0 (LX, LY, L2).
+    description: 2 channel numbers on ADC0 (LX, LY).
 
   adc1-channels:
     type: array
     required: true
-    description: rank0..2 channel numbers on ADC1 (RX, RY, R2).
+    description: 2 channel numbers on ADC1 (RX, RY).
+
+  adc2-channels:
+    type: array
+    required: true
+    description: 2 channel numbers on ADC2 (L2, R2).
+
+  resolutions:
+    type: array
+    required: true
+    description: per-ADC resolution in adcs order (e.g. <14 14 12>; ADC2 max 12).
 
   frames:
     type: int
     default: 4
-    description: ring depth in frames (one frame = 3 ranks).
-
-  resolution:
-    type: int
-    default: 14
+    description: ring depth in frames (one frame = 2 ranks).

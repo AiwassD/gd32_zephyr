@@ -31,18 +31,18 @@ static inline uint32_t hs2_afe_latest_frame(uint32_t frames, uint32_t ranks,
 
 /*
  * Assemble axis-ordered raw[6] from one frame of each ring.
- * ADC0 frame = [LX, LY, L2]; ADC1 frame = [RX, RY, R2].
+ * ADC0 frame = [LX, LY]; ADC1 frame = [RX, RY]; ADC2 frame = [L2, R2].
  * Output order = [LX, LY, RX, RY, L2, R2] (matches hs2_stick_axis_codes).
  */
 static inline void hs2_afe_assemble(const uint16_t *adc0, const uint16_t *adc1,
-				    int32_t raw[HS2_AFE_AXES])
+				    const uint16_t *adc2, int32_t raw[HS2_AFE_AXES])
 {
 	raw[0] = adc0[0];	/* LX */
 	raw[1] = adc0[1];	/* LY */
 	raw[2] = adc1[0];	/* RX */
 	raw[3] = adc1[1];	/* RY */
-	raw[4] = adc0[2];	/* L2 */
-	raw[5] = adc1[2];	/* R2 */
+	raw[4] = adc2[0];	/* L2 */
+	raw[5] = adc2[1];	/* R2 */
 }
 
 /* Fill raw[6] with the latest complete frame. Returns 0, or -ENODEV if the
