@@ -171,6 +171,18 @@
 			trigger-select = <0x0>;
 		};
 
+		/* ADC1 shares IRQ 18 with ADC0; own clock/reset (APB2 bit 9). */
+		adc1: adc@40012800 {
+			compatible = "gd,gd32-adc";
+			reg = <0x40012800 0x100>;
+			interrupts = <18 0>;
+			clocks = <&cctl GD32_CLOCK_ADC1>;
+			resets = <&rctl GD32_RESET_ADC1>;
+			channels = <16>;
+			status = "disabled";
+			#io-channel-cells = <1>;
+		};
+
 		i2c0: i2c@40005400 {
 			compatible = "gd,gd32-i2c-v2";
 			reg = <0x40005400 0x400>;
