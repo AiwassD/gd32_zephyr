@@ -223,7 +223,6 @@ int hs2_afe_read_snapshot(const struct device *afe, int32_t raw[HS2_AFE_AXES])
 {
 	const struct afe_config *cfg = afe->config;
 	struct afe_data *data = afe->data;
-	uint32_t items = cfg->frames * AFE_RANKS;
 	const uint16_t *frame[AFE_NADC];
 
 	if (!data->ready) {
