@@ -500,6 +500,8 @@ static int dwc2_tx_fifo_write(const struct device *dev,
 		diepctl |= USB_DWC2_DEPCTL_CNAK;
 	} else if (dwc2_in_completer_mode(dev) && udc_get_buf_info(buf)->status) {
 		/*
+		 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming or
+		 * reuse on another completer-mode DWC2 core (e.g. STM32F4 OTG_FS).
 		 * Completer mode: the control-IN status ZLP must clear NAK
 		 * atomically with EPENA. Otherwise this EPENA write latches
 		 * DIEPCTL0.NAKSTS and raises INEPNAKEFF, and there is no
@@ -2557,6 +2559,9 @@ static inline void dwc2_handle_iepint(const struct device *dev)
 				/* Ignore stale NAK effective interrupt */
 			} else if (n == 0 && priv->ignore_ep0_nakeff) {
 				/*
+				 * [GD32-QUIRK, shared driver] vendor-gate before
+				 * upstream / non-GD32 reuse: upstream this arm is a
+				 * no-op; the CNAK write below is GD32-specific.
 				 * Control-IN status stage armed EP0 and latched
 				 * NAKSTS, raising this INEPNAKEFF. Completer mode
 				 * has no STSPHSERCVD interrupt to clear the NAK
@@ -2578,6 +2583,9 @@ static inline void dwc2_handle_iepint(const struct device *dev)
 				priv->iso_in_rearm &= ~BIT(n);
 			} else {
 				/*
+				 * [GD32-QUIRK, shared driver] vendor-gate before
+				 * upstream / non-GD32 reuse: this entire else arm
+				 * does not exist upstream.
 				 * GD32: the IN endpoint is already disabled
 				 * (EPENA clear) but its NAK status stays latched.
 				 * The IN-disable path uses only per-endpoint SNAK
