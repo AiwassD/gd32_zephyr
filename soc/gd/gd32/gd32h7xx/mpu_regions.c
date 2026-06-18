@@ -34,10 +34,13 @@ static const struct arm_mpu_region mpu_regions[] = {
 #endif
 #endif
 
-#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(gpad_adc))
+#if DT_HAS_COMPAT_STATUS_OKAY(hs2_gd32_adc_freerun)
 	/*
 	 * Free-running ADC DMA rings live in the D2-domain sram1 (0x30000000),
 	 * which no other region covers, so mark the whole bank non-cacheable.
+	 * Gate on the AFE binding's compatible (an in-tree symbol) rather than a
+	 * specific node label, so the SoC layer does not depend on whatever label
+	 * the application's overlay gives the free-run node.
 	 */
 	MPU_REGION_ENTRY("AFE_DMA_BUF", DT_REG_ADDR(DT_NODELABEL(sram1)),
 			 REGION_RAM_NOCACHE_ATTR(REGION_16K)),
