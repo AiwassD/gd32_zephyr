@@ -2,7 +2,7 @@ identifier: gd32h757vit6_prod
 name: GD32H757VIT6-PROD
 type: mcu
 arch: arm
-ram: 512
+ram: 1024
 flash: 2048
 toolchain:
   - zephyr
