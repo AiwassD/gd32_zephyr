@@ -1516,6 +1516,21 @@ static int udc_dwc2_ep_deactivate(const struct device *dev,
 		priv->iso_enabled &= ~BIT(ep_bit);
 	}
 
+	/*
+	 * Abort any transfers still queued on the now-deactivated endpoint so
+	 * their buffers return to the class net_buf pool -- the same drain that
+	 * udc_dwc2_ep_dequeue() already does, which the .ep_disable path was
+	 * missing. udc_dwc2_ep_disable() aborts the endpoint in hardware without
+	 * firing a transfer completion, and an in-flight IN buffer is only peeked,
+	 * never removed from cfg->fifo. So a host-initiated re-enumeration (replug)
+	 * -- which disables the active endpoints through this API, not ep_dequeue
+	 * -- leaked every in-flight IN buffer, exhausting the (small) HID IN pool
+	 * and failing every report submit with -ENOMEM until a full reset. The
+	 * SETUP / dequeue / set_halt paths call the udc_dwc2_ep_disable helper
+	 * directly (not this API), so their own completion handling is unchanged.
+	 */
+	udc_ep_cancel_queued(dev, cfg);
+
 	return 0;
 }
 
