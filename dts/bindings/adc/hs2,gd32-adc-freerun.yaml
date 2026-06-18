@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 description: |
-  GD32H7 free-running dual-ADC analog front-end. Owns two ADC instances
+  GD32H7 free-running 3-ADC analog front-end. Owns three ADC instances
   (referenced via the adcs phandles, which should themselves be disabled so
   the standard gd,gd32-adc driver does not also claim them) and runs each in
   scan + continuous mode with a cyclic DMA stream. Exposes a latest-frame
@@ -16,12 +16,12 @@ properties:
   adcs:
     type: phandles
     required: true
-    description: ADC0 then ADC1 nodes (reg/clocks/resets are read from them).
+    description: ADC0, ADC1, ADC2 nodes (reg/clocks/resets are read from them).
 
   dmas:
     type: phandle-array
     required: true
-    description: DMA spec for adc0 then adc1 (via dmamux).
+    description: DMA spec for adc0, adc1, adc2 (via dmamux).
 
   dma-names:
     type: string-array
