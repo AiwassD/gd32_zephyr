@@ -243,6 +243,7 @@ static int gd32_usbhs_caps(const struct device *dev)
 		.post_enable = gd32_usbhs_post_enable_##n,			\
 		.disable = gd32_usbhs_disable_##n,				\
 		.caps = gd32_usbhs_caps,					\
+		.no_stsphsercvd = true,						\
 	};
 
 DT_INST_FOREACH_STATUS_OKAY(QUIRK_GD32_USBHS_DEFINE)

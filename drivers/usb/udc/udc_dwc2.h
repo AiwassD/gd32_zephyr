@@ -43,6 +43,11 @@ struct dwc2_vendor_quirks {
 	int (*post_hibernation_entry)(const struct device *dev);
 	/* Called before hibernation exit sequence */
 	int (*pre_hibernation_exit)(const struct device *dev);
+	/* Core lacks DOEPINT.STSPHSERCVD (e.g. GD32 USBHS: bit 5 Reserved). In
+	 * buffer-DMA mode the control-IN NAK after a control-read is cleared
+	 * from the OUT status-stage completion instead of from STSPHSERCVD.
+	 */
+	bool no_stsphsercvd;
 };
 
 /* Registers that have to be stored before Partial Power Down or Hibernation */
@@ -116,6 +121,7 @@ struct udc_dwc2_data {
 	unsigned int enumdone : 1;
 	unsigned int enumspd : 2;
 	unsigned int ignore_ep0_nakeff : 1;
+	bool no_stsphsercvd;
 	enum dwc2_suspend_type suspend_type;
 	/* Number of endpoints including control endpoint */
 	uint8_t numdeveps;

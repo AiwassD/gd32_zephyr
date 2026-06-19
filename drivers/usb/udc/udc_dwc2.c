@@ -498,7 +498,8 @@ static int dwc2_tx_fifo_write(const struct device *dev,
 	if (cfg->addr != USB_CONTROL_EP_IN) {
 		/* Non-control endpoint, set CNAK for all transfers */
 		diepctl |= USB_DWC2_DEPCTL_CNAK;
-	} else if (dwc2_in_completer_mode(dev) && udc_get_buf_info(buf)->status) {
+	} else if ((dwc2_in_completer_mode(dev) || priv->no_stsphsercvd) &&
+		   udc_get_buf_info(buf)->status) {
 		/*
 		 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming or
 		 * reuse on another completer-mode DWC2 core (e.g. STM32F4 OTG_FS).
@@ -1839,6 +1840,9 @@ static int udc_dwc2_init_controller(const struct device *dev)
 	priv->bufferdma = (usb_dwc2_get_ghwcfg2_otgarch(ghwcfg2) ==
 			   USB_DWC2_GHWCFG2_OTGARCH_INTERNALDMA);
 
+	priv->no_stsphsercvd = (config->quirks != NULL &&
+				config->quirks->no_stsphsercvd);
+
 	if (!IS_ENABLED(CONFIG_UDC_DWC2_DMA)) {
 		priv->bufferdma = 0;
 	} else if (priv->bufferdma) {
@@ -2693,6 +2697,15 @@ static inline void dwc2_handle_out_xfercompl(const struct device *dev,
 			/* Data is not valid, discard it */
 			bcnt = 0;
 		}
+	}
+
+	/* GD32 (no STSPHSERCVD) clears the control-IN NAK from the EP0-OUT
+	 * status-stage completion -- the DMA-mode substitute for the absent
+	 * STSPHSERCVD event. */
+	if (priv->no_stsphsercvd && dwc2_in_buffer_dma_mode(dev) &&
+	    ep_idx == 0U && bcnt == 0U &&
+	    buf != NULL && udc_get_buf_info(buf)->status) {
+		dwc2_clear_control_in_nak(dev);
 	}
 
 	if (dwc2_in_buffer_dma_mode(dev) && bcnt) {
