@@ -2699,9 +2699,12 @@ static inline void dwc2_handle_out_xfercompl(const struct device *dev,
 		}
 	}
 
-	/* GD32 (no STSPHSERCVD) clears the control-IN NAK from the EP0-OUT
-	 * status-stage completion -- the DMA-mode substitute for the absent
-	 * STSPHSERCVD event. */
+	/* [GD32-QUIRK, shared driver] vendor-gate before upstreaming or reuse on
+	 * another buffer-DMA DWC2 core. GD32 hardwires DOEPINT.STSPHSERCVD
+	 * Reserved, so in DMA mode the control-IN NAK is cleared here -- from the
+	 * EP0-OUT zero-length status-stage completion -- as the substitute for
+	 * the absent STSPHSERCVD event. buf is already non-NULL (the udc_buf_peek
+	 * above returns early otherwise); the buf != NULL test is defensive. */
 	if (priv->no_stsphsercvd && dwc2_in_buffer_dma_mode(dev) &&
 	    ep_idx == 0U && bcnt == 0U &&
 	    buf != NULL && udc_get_buf_info(buf)->status) {
