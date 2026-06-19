@@ -1905,6 +1905,20 @@ static int udc_dwc2_init_controller(const struct device *dev)
 
 	if (priv->bufferdma) {
 		gahbcfg |= USB_DWC2_GAHBCFG_DMAEN;
+
+		if (priv->no_stsphsercvd) {
+			/*
+			 * [GD32-QUIRK, shared driver] vendor-gate before
+			 * upstreaming. The GD32 USBHS internal-DMA bus master
+			 * stalls the AHB on its first transfer if the burst
+			 * length is left at single (HBSTLEN=0) after reset,
+			 * wedging the whole system. The GD32 bare-metal driver
+			 * programs INCR8 together with DMAEN; match it.
+			 */
+			gahbcfg &= ~USB_DWC2_GAHBCFG_HBSTLEN_MASK;
+			gahbcfg |= usb_dwc2_set_gahbcfg_hbstlen(
+					USB_DWC2_GAHBCFG_HBSTLEN_INCR8);
+		}
 	} else {
 		gahbcfg &= ~USB_DWC2_GAHBCFG_DMAEN;
 	}
@@ -2395,8 +2409,9 @@ static void dwc2_on_bus_reset(const struct device *dev)
 		 * so GET_DESCRIPTOR(Device) returns bLength=0 and enumeration fails.
 		 * The GD32 bare-metal usbd_int_reset() re-arms EP0-OUT synchronously
 		 * in the reset ISR; mirror that here (DOEPTSIZ0 SUPCNT=3/PKTCNT=1/
-		 * XFERSIZE=24 + EPENA|CNAK) so the first SETUP is captured. Completer
-		 * mode only -- Buffer DMA mode arms EP0-OUT through a different path.
+		 * XFERSIZE=24 + EPENA|CNAK) so the first SETUP is captured. This is
+		 * the Completer-mode arm; the Buffer-DMA equivalent is the else-if
+		 * below (it needs a DMA buffer, so it goes through dwc2_prep_rx).
 		 */
 		sys_write32(usb_dwc2_set_doeptsizn_pktcnt(1) |
 			    usb_dwc2_set_doeptsizn_xfersize(24) |
@@ -2404,6 +2419,25 @@ static void dwc2_on_bus_reset(const struct device *dev)
 			    (mem_addr_t)&base->out_ep[0].doeptsiz);
 		sys_set_bits(dwc2_get_dxepctl_reg(dev, 0),
 			     USB_DWC2_DEPCTL_EPENA | USB_DWC2_DEPCTL_CNAK);
+	} else if (dwc2_in_buffer_dma_mode(dev) && priv->no_stsphsercvd) {
+		/*
+		 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming or
+		 * reuse on another buffer-DMA DWC2 core. Buffer-DMA counterpart
+		 * of bug I above: the GD32 core likewise clears DOEPTSIZ0/EPENA
+		 * on reset, so without this the host's first SETUP after reset is
+		 * dropped and GET_DESCRIPTOR returns bLength=0 (Code 43). Re-arm
+		 * EP0-OUT here against the control-OUT SETUP buffer the stack has
+		 * already queued, reusing dwc2_prep_rx so the doepdma program and
+		 * the Buffer-DMA SETUP CNAK rules (EPENA, no CNAK) are applied
+		 * correctly. The buffer is still queued (no SETUP consumed yet).
+		 */
+		struct udc_ep_config *const cfg_out =
+			udc_get_ep_cfg(dev, USB_CONTROL_EP_OUT);
+		struct net_buf *buf = udc_buf_peek(cfg_out);
+
+		if (buf != NULL) {
+			dwc2_prep_rx(dev, buf, cfg_out);
+		}
 	}
 
 	/* Clear device address during reset. */
@@ -2771,6 +2805,27 @@ static inline void dwc2_handle_oepint(const struct device *dev)
 			addr = sys_read32((mem_addr_t)&base->out_ep[0].doepdma);
 			sys_cache_data_invd_range((void *)(uintptr_t)(addr - 8), 8);
 			memcpy(priv->setup, (void *)(uintptr_t)(addr - 8), sizeof(priv->setup));
+		}
+
+		/*
+		 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming. GD32
+		 * USBHS does not implement the STUPPKTRCVD status bit (DOEPINTF has
+		 * no bit 15), so the block above never fires and priv->setup is
+		 * never filled (host sees an all-zero SETUP and enumeration fails).
+		 * GD32 signals a received SETUP only via SETUP/STPF (bit 3); copy
+		 * the DMA'd SETUP here on that bit and suppress the accompanying
+		 * XFERCOMPL so it is not also handled as an OUT data transfer.
+		 * Mirrors GD32's bare-metal usbd ISR, which reads the setup on STPF.
+		 */
+		if (priv->no_stsphsercvd && dwc2_in_buffer_dma_mode(dev) &&
+		    n == 0U && (doepint & USB_DWC2_DOEPINT_SETUP)) {
+			uint32_t addr;
+
+			status &= ~USB_DWC2_DOEPINT_XFERCOMPL;
+			addr = sys_read32((mem_addr_t)&base->out_ep[0].doepdma);
+			sys_cache_data_invd_range((void *)(uintptr_t)(addr - 8), 8);
+			memcpy(priv->setup, (void *)(uintptr_t)(addr - 8),
+			       sizeof(priv->setup));
 		}
 
 		if (status & USB_DWC2_DOEPINT_SETUP) {
