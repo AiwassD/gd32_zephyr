@@ -69,6 +69,13 @@ enum dwc2_drv_event_type {
 /* Percentage limit of how much SPRAM can be allocated for RxFIFO */
 #define MAX_RXFIFO_GDFIFO_PERCENTAGE 25
 
+/* [GD32-QUIRK] Microframes after a bus reset during which the SOF event is held
+ * back from the usbd thread in buffer-DMA mode, so the 8 kHz SOF flood does not
+ * starve EP0 control transfers while the host is still enumerating. ~1 s at HS
+ * (8 microframes/ms); enumeration normally completes well under 500 ms.
+ */
+#define DWC2_GD32_SOF_GATE 8000U
+
 static void udc_dwc2_ep_disable(const struct device *dev,
 				struct udc_ep_config *const cfg,
 				bool stall, bool wait);
@@ -498,7 +505,28 @@ static int dwc2_tx_fifo_write(const struct device *dev,
 	if (cfg->addr != USB_CONTROL_EP_IN) {
 		/* Non-control endpoint, set CNAK for all transfers */
 		diepctl |= USB_DWC2_DEPCTL_CNAK;
-	} else if ((dwc2_in_completer_mode(dev) || priv->no_stsphsercvd) &&
+	} else if (priv->no_stsphsercvd && dwc2_in_buffer_dma_mode(dev)) {
+		/*
+		 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming or
+		 * reuse on another reduced DWC2 core. GD32 USBHS buffer-DMA:
+		 * arm EVERY control-IN transaction (the data chunks AND the
+		 * status ZLP) with CNAK | EPEN, mirroring the GD32 vendor stack.
+		 *
+		 * EP0's DIEPTSIZ0 caps one transfer at 127 bytes / 3 packets, so
+		 * a control-IN larger than that (e.g. the 507-byte HID report
+		 * descriptor) is split into multiple 64-byte chunks, each
+		 * re-armed from dwc2_handle_in_xfercompl(). GD32's reduced core
+		 * latches DIEPCTL0.NAKSTS after each chunk's XFERCOMPL and has no
+		 * STSPHSERCVD event to clear it, so a continuation arm WITHOUT
+		 * CNAK leaves EP0 NAKing forever: the host times out and
+		 * re-enumerates (Windows Code 10). Descriptors <=127 bytes fit a
+		 * single arm and never hit this, which is why only the large HID
+		 * report descriptor hung. Arming CNAK | EPEN atomically also
+		 * keeps NAKSTS clear, so the spurious INEPNAKEFF in
+		 * dwc2_handle_iepint() is seen as stale instead of disabling EP0.
+		 */
+		diepctl |= USB_DWC2_DEPCTL_CNAK;
+	} else if (dwc2_in_completer_mode(dev) &&
 		   udc_get_buf_info(buf)->status) {
 		/*
 		 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming or
@@ -1347,6 +1375,23 @@ static int dwc2_unset_dedicated_fifo(const struct device *dev,
 		if (priv->txf_set & higher_mask) {
 			LOG_WRN("Some of the FIFOs higher than %u are set, %x",
 				ep_idx, priv->txf_set & higher_mask);
+			/*
+			 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming.
+			 * Dynamic-FIFO RAM can only be reclaimed top-down, so a non-top
+			 * FIFO's RAM stays allocated here. On GD32 the host re-enumerates
+			 * (re-CONFIGURE / replug / suspend-resume) repeatedly; leaving the
+			 * txf_set bit set makes the next SET_CONFIGURATION take the stale
+			 * "reuse" path in dwc2_set_dedicated_fifo, and across repeated
+			 * re-stacks the FIFOs drift (observed ftx_avail 128->68) until the
+			 * IN endpoint goes inactive and try_submit floods -ENOENT.
+			 * Hardware-confirmed under Motion Sync (8 kHz SOF) re-enum on
+			 * gd32h757. Clear the logical bit so the next enable does a clean
+			 * fresh re-stack. Gated to GD32; other cores keep upstream
+			 * behavior (the bit is still cleared below on the normal path).
+			 */
+			if (priv->no_stsphsercvd) {
+				priv->txf_set &= ~BIT(ep_idx);
+			}
 			return 0;
 		}
 
@@ -2359,6 +2404,11 @@ static void dwc2_on_bus_reset(const struct device *dev)
 	uint32_t doepmsk;
 	uint32_t diepmsk;
 
+	/* [GD32-QUIRK] restart the buffer-DMA SOF-event enumeration gate so the
+	 * 8 kHz SOF flood stays off EP0 until this enumeration completes.
+	 */
+	priv->sof_count = 0;
+
 	/*
 	 * Clear all stale per-endpoint interrupt flags latched across the
 	 * suspend->resume->reset transition (mirrors the GD32 bare-metal
@@ -2641,30 +2691,58 @@ static inline void dwc2_handle_iepint(const struct device *dev)
 		if (status & USB_DWC2_DIEPINT_EPDISBLD) {
 			uint32_t diepctl = sys_read32(diepctl_reg);
 
-			k_event_post(&priv->ep_disabled, BIT(n));
+			if (priv->no_stsphsercvd && n == 0U &&
+			    (status & USB_DWC2_DIEPINT_XFERCOMPL)) {
+				/*
+				 * [GD32-QUIRK, shared driver] vendor-gate before
+				 * upstream / non-GD32 reuse. GD32 USBHS asserts a
+				 * spurious EPDISBLD on EP0-IN together with XFERCOMPL at
+				 * the end of EVERY control-IN data chunk (the endpoint
+				 * self-disables per transfer; DIEPINT reads 0x...2083).
+				 *
+				 * A control-IN larger than EP0's 127-byte DIEPTSIZ0 cap
+				 * (e.g. the 507-byte HID report descriptor) is sent as
+				 * multiple 64-byte chunks, each re-armed by
+				 * dwc2_handle_in_xfercompl() in the XFERCOMPL branch
+				 * ABOVE. Running the normal EPDISBLD path here would
+				 * dwc2_flush_tx_fifo() the FIFO that the just-re-armed
+				 * chunk's DMA engine is concurrently filling -- a race
+				 * the DMA loses intermittently, so a chunk never reaches
+				 * the host: the transfer stalls, the host times out and
+				 * re-enumerates forever (Windows Code 10). Chunks <=127
+				 * bytes fit one transfer and never expose it, which is
+				 * why only large descriptors hung. The GD32 vendor stack
+				 * (usbd_int_epin) ignores IN-endpoint EPDISBLD entirely;
+				 * do the same for this self-disable. A real teardown
+				 * disable (udc_dwc2_ep_disable) carries NO XFERCOMPL, so
+				 * it still takes the flush + ep_disabled post below.
+				 */
+			} else {
+				k_event_post(&priv->ep_disabled, BIT(n));
 
-			/* TODO: Read DIEPTSIZn here? Programming Guide suggest it to
-			 * let application know how many bytes of interrupted transfer
-			 * were transferred to the host.
-			 */
+				/* TODO: Read DIEPTSIZn here? Programming Guide suggest it to
+				 * let application know how many bytes of interrupted transfer
+				 * were transferred to the host.
+				 */
 
-			dwc2_flush_tx_fifo(dev, usb_dwc2_get_depctl_txfnum(diepctl));
+				dwc2_flush_tx_fifo(dev, usb_dwc2_get_depctl_txfnum(diepctl));
 
-			if ((usb_dwc2_get_depctl_eptype(diepctl) == USB_DWC2_DEPCTL_EPTYPE_ISO) &&
-			    (priv->iso_in_rearm & BIT(n))) {
-				struct udc_ep_config *cfg = udc_get_ep_cfg(dev, n | USB_EP_DIR_IN);
-				struct net_buf *buf;
+				if ((usb_dwc2_get_depctl_eptype(diepctl) == USB_DWC2_DEPCTL_EPTYPE_ISO) &&
+				    (priv->iso_in_rearm & BIT(n))) {
+					struct udc_ep_config *cfg = udc_get_ep_cfg(dev, n | USB_EP_DIR_IN);
+					struct net_buf *buf;
 
-				/* Data is no longer relevant, discard it */
-				buf = udc_buf_get(cfg);
-				if (buf) {
-					udc_submit_ep_event(dev, buf, 0);
+					/* Data is no longer relevant, discard it */
+					buf = udc_buf_get(cfg);
+					if (buf) {
+						udc_submit_ep_event(dev, buf, 0);
+					}
+
+					/* Try to queue next packet before SOF */
+					dwc2_handle_xfer_next(dev, cfg);
+
+					priv->iso_in_rearm &= ~BIT(n);
 				}
-
-				/* Try to queue next packet before SOF */
-				dwc2_handle_xfer_next(dev, cfg);
-
-				priv->iso_in_rearm &= ~BIT(n);
 			}
 		}
 
@@ -3095,7 +3173,34 @@ static void udc_dwc2_isr_handler(const struct device *dev)
 
 			dsts = sys_read32((mem_addr_t)&base->dsts);
 			priv->sof_num = usb_dwc2_get_dsts_soffn(dsts);
-			udc_submit_sof_event(dev);
+
+			/*
+			 * [GD32-QUIRK, shared driver] vendor-gate before upstreaming.
+			 * In buffer-DMA mode the 8 kHz SOF event flood to the usbd
+			 * thread starves the EP0 control transfers the host still needs
+			 * to finish enumerating: the 507-byte HID report descriptor (a
+			 * slow multi-chunk EP0-IN DMA transfer) and the strings time out
+			 * (host: ERROR_GEN_FAILURE / 5 s strings -> spurious suspend,
+			 * D3). Slave mode is immune (EP0-IN is a fast CPU FIFO push),
+			 * which is why Motion Sync only broke enumeration under DMA.
+			 * The same flood also starves the 8 kHz ep1 IN-completion
+			 * events on this shared thread, freezing the report stream. So
+			 * suppress the SOF event for the first second after each bus
+			 * reset (covers enumeration), then throttle it to ~1 kHz (every
+			 * 8th microframe): ample backstop, since the depth-2 pipeline +
+			 * completion refill self-sustain the stream and SOF only catches
+			 * NAK stalls.
+			 * sof_num is still refreshed every microframe above (ISO parity).
+			 */
+			if (priv->no_stsphsercvd && dwc2_in_buffer_dma_mode(dev)) {
+				priv->sof_count++;
+				if (priv->sof_count >= DWC2_GD32_SOF_GATE &&
+				    (priv->sof_count & 0x7U) == 0U) {
+					udc_submit_sof_event(dev);
+				}
+			} else {
+				udc_submit_sof_event(dev);
+			}
 		}
 
 		if (int_status & USB_DWC2_GINTSTS_USBRST) {

@@ -122,6 +122,10 @@ struct udc_dwc2_data {
 	unsigned int enumspd : 2;
 	unsigned int ignore_ep0_nakeff : 1;
 	bool no_stsphsercvd;
+	/* [GD32-QUIRK] microframes since bus reset, used to gate the SOF event
+	 * flood away from EP0 control transfers during enumeration (DMA mode).
+	 */
+	uint32_t sof_count;
 	enum dwc2_suspend_type suspend_type;
 	/* Number of endpoints including control endpoint */
 	uint8_t numdeveps;
