@@ -2382,20 +2382,10 @@ static void dwc2_on_bus_reset(const struct device *dev)
 	if (dwc2_in_completer_mode(dev)) {
 		sys_set_bits((mem_addr_t)&base->gintmsk,
 			     USB_DWC2_GINTSTS_RXFLVL);
-
-		/*
-		 * GD32 USBHS bug I: the core clears DOEPTSIZ0 (EP0-OUT SETUP count)
-		 * on USB reset, and the device stack only re-arms EP0-OUT later via
-		 * an asynchronous control-OUT enqueue -- too late for the host's
-		 * first SETUP right after reset. That SETUP is dropped (no RXFLVL),
-		 * so GET_DESCRIPTOR(Device) returns bLength=0 and enumeration fails.
-		 * The GD32 bare-metal usbd_int_reset() re-arms EP0-OUT synchronously
-		 * in the reset ISR; mirror that here (DOEPTSIZ0 SUPCNT=3/PKTCNT=1/
-		 * XFERSIZE=24 + EPENA|CNAK) so the first SETUP is captured. Completer
-		 * mode only -- Buffer DMA mode arms EP0-OUT through a different path.
+		/* Keep EP0 OUT ready for SETUP after reset.  PKTCNT is left
+		 * to dwc2_prep_rx(), where a Zephyr-owned buffer exists.
 		 */
-		sys_write32(usb_dwc2_set_doeptsizn_pktcnt(1) |
-			    usb_dwc2_set_doeptsizn_xfersize(24) |
+		sys_write32(usb_dwc2_set_doeptsizn_xfersize(24) |
 			    (3 << USB_DWC2_DOEPTSIZ0_SUPCNT_POS),
 			    (mem_addr_t)&base->out_ep[0].doeptsiz);
 		sys_set_bits(dwc2_get_dxepctl_reg(dev, 0),
