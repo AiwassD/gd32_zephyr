@@ -1386,10 +1386,10 @@ static int dwc2_unset_dedicated_fifo(const struct device *dev,
 			 * IN endpoint goes inactive and try_submit floods -ENOENT.
 			 * Hardware-confirmed under Motion Sync (8 kHz SOF) re-enum on
 			 * gd32h757. Clear the logical bit so the next enable does a clean
-			 * fresh re-stack. Gated to GD32; other cores keep upstream
-			 * behavior (the bit is still cleared below on the normal path).
+			 * fresh re-stack. Gated to GD32 buffer-DMA; slave and other cores
+			 * keep upstream behavior (the drift was only observed under DMA).
 			 */
-			if (priv->no_stsphsercvd) {
+			if (priv->no_stsphsercvd && dwc2_in_buffer_dma_mode(dev)) {
 				priv->txf_set &= ~BIT(ep_idx);
 			}
 			return 0;
@@ -2691,8 +2691,8 @@ static inline void dwc2_handle_iepint(const struct device *dev)
 		if (status & USB_DWC2_DIEPINT_EPDISBLD) {
 			uint32_t diepctl = sys_read32(diepctl_reg);
 
-			if (priv->no_stsphsercvd && n == 0U &&
-			    (status & USB_DWC2_DIEPINT_XFERCOMPL)) {
+			if (priv->no_stsphsercvd && dwc2_in_buffer_dma_mode(dev) &&
+			    n == 0U && (status & USB_DWC2_DIEPINT_XFERCOMPL)) {
 				/*
 				 * [GD32-QUIRK, shared driver] vendor-gate before
 				 * upstream / non-GD32 reuse. GD32 USBHS asserts a
